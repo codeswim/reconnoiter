@@ -88,7 +88,8 @@ typedef enum {
 
 struct value_list {
   char *v;
-  int64_t ts;
+  mtev_boolean got_ts;
+  uint64_t ts;
   struct value_list *next;
 };
 struct rest_json_payload {
@@ -117,7 +118,8 @@ struct rest_json_payload {
   if (json->last_value == NULL || json->last_value->v != NULL) { \
     struct value_list *nlv = malloc(sizeof(*nlv)); \
     nlv->v = a; \
-    nlv->ts = -1; \
+    nlv->got_ts = mtev_false; \
+    nlv->ts = 0; \
     nlv->next = json->last_value; \
     json->last_value = nlv; \
   } else { \
@@ -126,14 +128,16 @@ struct rest_json_payload {
 } while(0)
 
 #define NEW_LV_TS(json,a) do { \
-  if (json->last_value == NULL || json->last_value->ts != -1) { \
+  if (json->last_value == NULL || json->last_value->got_ts == mtev_true) { \
     struct value_list *nlv = malloc(sizeof(*nlv)); \
     nlv->v = NULL; \
+    nlv->got_ts = mtev_true; \
     nlv->ts = strtoull(a, NULL, 10); \
     nlv->next = json->last_value; \
     json->last_value = nlv; \
   } else { \
     json->last_value->ts = strtoull(a, NULL, 10); \
+    json->last_value->got_ts = mtev_true; \
   }\
 } while(0)
 
@@ -448,7 +452,7 @@ httptrap_yajl_cb_end_map(void *ctx) {
       tmp_cnt++;
       noit_stats_set_metric_coerce_with_timestamp(json->check, metric_name,
                                                   json->last_type, p->v,
-                                                  p->ts);
+                                                  (p->got_ts) ? p->ts : 0);
       last_p = p;
       if(p->v != NULL && IS_METRIC_TYPE_NUMERIC(json->last_type)) {
         total += strtold(p->v, NULL);

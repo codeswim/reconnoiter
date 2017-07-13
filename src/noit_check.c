@@ -2041,7 +2041,7 @@ void
 noit_stats_set_metric_with_timestamp(noit_check_t *check,
                       const char *name, metric_type_t type,
                       const void *value,
-                      int64_t timestamp) {
+                      uint64_t timestamp) {
   stats_t *c;
   metric_t *m = mtev_memory_safe_malloc_cleanup(sizeof(*m), noit_check_safe_free_metric);
   memset(m, 0, sizeof(*m));
@@ -2066,7 +2066,7 @@ void
 noit_stats_set_metric_coerce_with_timestamp(noit_check_t *check,
                              const char *name, metric_type_t t,
                              const char *v,
-                             int64_t timestamp) {
+                             uint64_t timestamp) {
   char *endptr;
   stats_t *c;
   c = noit_check_get_stats_inprogress(check);
