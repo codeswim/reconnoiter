@@ -447,12 +447,19 @@ httptrap_yajl_cb_end_map(void *ctx) {
       break;
     }
           
-    int tmp_cnt = 0;
     for(p=json->last_value;p;p=p->next) {
-      tmp_cnt++;
-      noit_stats_set_metric_coerce_with_timestamp(json->check, metric_name,
-                                                  json->last_type, p->v,
-                                                  (p->got_ts) ? p->ts : 0);
+      /* We need to do immediate logging if we got a timestamp */
+      if (p->got_ts) {
+        struct timeval timestamp;
+        timestamp.tv_sec = (p->ts / 1000);
+        timestamp.tv_usec = (p->ts % 1000) * 1000;
+        noit_stats_log_immediate_metric_timed(json->check, metric_name, METRIC_GUESS, p->v, &timestamp);
+      }
+      else {
+        noit_stats_set_metric_coerce_with_timestamp(json->check, metric_name,
+                                                    json->last_type, p->v,
+                                                    (p->got_ts) ? p->ts : 0);
+      }
       last_p = p;
       if(p->v != NULL && IS_METRIC_TYPE_NUMERIC(json->last_type)) {
         total += strtold(p->v, NULL);
