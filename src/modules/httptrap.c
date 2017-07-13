@@ -33,6 +33,7 @@
 #include <mtev_defines.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <math.h>
@@ -87,6 +88,7 @@ typedef enum {
 
 struct value_list {
   char *v;
+  int64_t ts;
   struct value_list *next;
 };
 struct rest_json_payload {
@@ -111,11 +113,28 @@ struct rest_json_payload {
   mtev_boolean immediate;
 };
 
-#define NEW_LV(json,a) do { \
-  struct value_list *nlv = malloc(sizeof(*nlv)); \
-  nlv->v = a; \
-  nlv->next = json->last_value; \
-  json->last_value = nlv; \
+#define NEW_LV_VALUE(json,a) do { \
+  if (json->last_value == NULL || json->last_value->v != NULL) { \
+    struct value_list *nlv = malloc(sizeof(*nlv)); \
+    nlv->v = a; \
+    nlv->ts = -1; \
+    nlv->next = json->last_value; \
+    json->last_value = nlv; \
+  } else { \
+    json->last_value->v = a; \
+  }\
+} while(0)
+
+#define NEW_LV_TS(json,a) do { \
+  if (json->last_value == NULL || json->last_value->ts != -1) { \
+    struct value_list *nlv = malloc(sizeof(*nlv)); \
+    nlv->v = NULL; \
+    nlv->ts = strtoull(a, NULL, 10); \
+    nlv->next = json->last_value; \
+    json->last_value = nlv; \
+  } else { \
+    json->last_value->ts = strtoull(a, NULL, 10); \
+  }\
 } while(0)
 
 static mtev_boolean
@@ -185,7 +204,7 @@ httptrap_yajl_cb_null(void *ctx) {
   rv = set_array_key(json);
   if(json->last_special_key == HT_EX_VALUE) {
     _YD("[%3d]*cb_null\n", json->depth);
-    NEW_LV(json, NULL);
+    NEW_LV_VALUE(json, NULL);
     return 1;
   }
   if(json->last_special_key) return 0;
@@ -211,7 +230,7 @@ httptrap_yajl_cb_boolean(void *ctx, int boolVal) {
   }
   rv = set_array_key(json);
   if(json->last_special_key == HT_EX_VALUE) {
-    NEW_LV(json, strdup(boolVal ? "1" : "0"));
+    NEW_LV_VALUE(json, strdup(boolVal ? "1" : "0"));
     _YD("[%3d]*cb_boolean -> %s\n", json->depth, boolVal ? "true" : "false");
     return 1;
   }
@@ -245,16 +264,26 @@ httptrap_yajl_cb_number(void *ctx, const char * numberVal,
     str = malloc(numberLen+1);
     memcpy(str, numberVal, numberLen);
     str[numberLen] = '\0';
-    NEW_LV(json, str);
+    NEW_LV_VALUE(json, str);
     _YD("[%3d] cb_number %s\n", json->depth, str);
     return 1;
   }
   if(rv) return 1;
+
+  if(json->last_special_key == HT_EX_TS) {
+    char *str;
+    str = malloc(numberLen+1);
+    memcpy(str, numberVal, numberLen);
+    str[numberLen] = '\0';
+    NEW_LV_TS(json, str);
+    free(str);
+    json->saw_complex_type |= HT_EX_TS;
+    return 1;
+  }
   /* If we get a number for _flags, it simply doesn't
    * match any flags, so... no op
    */
   if(json->last_special_key == HT_EX_FLAGS) return 1;
-  if(json->last_special_key == HT_EX_TS) return 1;
   if(json->last_special_key) {
     _YD("[%3d] cb_number [BAD]\n", json->depth);
     return 0;
@@ -307,7 +336,7 @@ httptrap_yajl_cb_string(void *ctx, const unsigned char * stringVal,
     str = malloc(stringLen+1);
     memcpy(str, stringVal, stringLen);
     str[stringLen] = '\0';
-    NEW_LV(json, str);
+    NEW_LV_VALUE(json, str);
     _YD("[%3d] cb_string { _value: %s }\n", json->depth, str);
     json->saw_complex_type |= HT_EX_VALUE;
     return 1;
@@ -361,7 +390,8 @@ httptrap_yajl_cb_end_map(void *ctx) {
   _YD("[%3d]%-.*s cb_end_map\n", json->depth, json->depth, "");
   json->depth--;
   metric_name = json->keys[json->depth];
-  if(json->saw_complex_type == 0x3) {
+  if(  (json->saw_complex_type == 0x3) || (json->saw_complex_type == 0x6) ||
+       (json->saw_complex_type == 0x7) ) {
     long double total = 0, cnt = 0, accum = 1;
     double newval;
     mtev_boolean use_computed_value = mtev_false;
@@ -413,9 +443,12 @@ httptrap_yajl_cb_end_map(void *ctx) {
       break;
     }
           
+    int tmp_cnt = 0;
     for(p=json->last_value;p;p=p->next) {
-      noit_stats_set_metric_coerce(json->check, metric_name,
-                                   json->last_type, p->v);
+      tmp_cnt++;
+      noit_stats_set_metric_coerce_with_timestamp(json->check, metric_name,
+                                                  json->last_type, p->v,
+                                                  p->ts);
       last_p = p;
       if(p->v != NULL && IS_METRIC_TYPE_NUMERIC(json->last_type)) {
         total += strtold(p->v, NULL);
