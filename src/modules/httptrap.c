@@ -275,8 +275,12 @@ httptrap_yajl_cb_number(void *ctx, const char * numberVal,
   if(rv) return 1;
 
   if(json->last_special_key == HT_EX_TS) {
-    char *str;
-    str = malloc(numberLen+1);
+    /* If we're not asynch, just ignore the timestamps
+     * for now */
+    if (!json->immediate) {
+      return 1;
+    }
+    char *str = malloc(numberLen+1);
     memcpy(str, numberVal, numberLen);
     str[numberLen] = '\0';
     NEW_LV_TS(json, str);
@@ -316,7 +320,8 @@ httptrap_yajl_cb_string(void *ctx, const unsigned char * stringVal,
     _YD("[%3d] cb_string [BAD]\n", json->depth);
     return 0;
   }
-  if(json->last_special_key == HT_EX_TS) /* handle ts */
+  /* Disallow TS strings for now */
+  if(json->last_special_key == HT_EX_TS)
     return 1;
   if(json->last_special_key == HT_EX_TAGS) /* handle tag */
     return 1;
@@ -446,7 +451,9 @@ httptrap_yajl_cb_end_map(void *ctx) {
       total = old_total;
       break;
     }
-          
+
+    struct value_list *last_non_timestamped = NULL;
+    mtev_boolean got_timestamps = mtev_false;
     for(p=json->last_value;p;p=p->next) {
       /* We need to do immediate logging if we got a timestamp */
       if (p->got_ts) {
@@ -454,12 +461,14 @@ httptrap_yajl_cb_end_map(void *ctx) {
         timestamp.tv_sec = (p->ts / 1000);
         timestamp.tv_usec = (p->ts % 1000) * 1000;
         noit_stats_log_immediate_metric_timed(json->check, metric_name, METRIC_GUESS, p->v, &timestamp);
+        got_timestamps = mtev_true;
       }
       else {
-        noit_stats_set_metric_coerce_with_timestamp(json->check, metric_name,
-                                                    json->last_type, p->v,
-                                                    (p->got_ts) ? p->ts : 0);
+        last_non_timestamped = p;
       }
+      noit_stats_set_metric_coerce_with_timestamp(json->check, metric_name,
+                                                  json->last_type, p->v,
+                                                  (p->got_ts) ? p->ts : 0);
       last_p = p;
       if(p->v != NULL && IS_METRIC_TYPE_NUMERIC(json->last_type)) {
         total += strtold(p->v, NULL);
@@ -485,12 +494,19 @@ httptrap_yajl_cb_end_map(void *ctx) {
         m->accumulator = cnt;
       }
     }
-    if(json->immediate && last_p != NULL) {
-      if(use_computed_value) {
-        noit_stats_log_immediate_metric(json->check, metric_name, 'n', &newval);
+    if (got_timestamps == mtev_false) {
+      if(json->immediate && last_p != NULL) {
+        if(use_computed_value) {
+          noit_stats_log_immediate_metric(json->check, metric_name, 'n', &newval);
+        }
+        else {
+          noit_stats_log_immediate_metric(json->check, metric_name, json->last_type, last_p->v);
+        }
       }
-      else {
-        noit_stats_log_immediate_metric(json->check, metric_name, json->last_type, last_p->v);
+    }
+    else {
+      if(json->immediate && last_non_timestamped != NULL) {
+        noit_stats_log_immediate_metric(json->check, metric_name, json->last_type, last_non_timestamped->v);
       }
     }
   }
